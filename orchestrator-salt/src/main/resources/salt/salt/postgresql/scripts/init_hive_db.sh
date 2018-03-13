@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -ex
+
 if [ ! -f "/var/ambari-init-executed" ]; then
     echo "Create Hive database"
     echo "CREATE DATABASE $DATABASE;" | psql -U postgres
