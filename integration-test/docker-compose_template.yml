@@ -18,5 +18,5 @@ test:
   image: java:8
 swagger-diff:
   dns:
-  command: curl -k http://cloudbreak.service.consul:8080/cb/api/swagger.json -o new.json && curl -k  https://qa-cloud.eng.hortonworks.com/cb/api/swagger.json -o old.json && swagger-diff -i old.json new.json
+  command: bash -c " curl -k http://cloudbreak.service.consul:8080/cb/api/swagger.json -o new.json && curl -k  https://qa-cloud.eng.hortonworks.com/cb/api/swagger.json -o old.json && swagger-diff -i old.json new.json"
   image: afarsang/docker-swagger-diff
