@@ -1,7 +1,6 @@
 package com.sequenceiq.cloudbreak.service.cluster.ambari;
 
 import static com.sequenceiq.cloudbreak.api.model.Status.AVAILABLE;
-import static com.sequenceiq.cloudbreak.service.cluster.ambari.DataNodeUtils.sortByUsedSpace;
 import static com.sequenceiq.cloudbreak.orchestrator.container.DockerContainer.AMBARI_AGENT;
 import static com.sequenceiq.cloudbreak.service.PollingResult.SUCCESS;
 import static com.sequenceiq.cloudbreak.service.PollingResult.isSuccess;
@@ -10,10 +9,12 @@ import static com.sequenceiq.cloudbreak.service.cluster.ambari.AmbariOperationTy
 import static com.sequenceiq.cloudbreak.service.cluster.ambari.AmbariOperationType.DECOMMISSION_SERVICES_AMBARI_PROGRESS_STATE;
 import static com.sequenceiq.cloudbreak.service.cluster.ambari.AmbariOperationType.START_SERVICES_AMBARI_PROGRESS_STATE;
 import static com.sequenceiq.cloudbreak.service.cluster.ambari.AmbariOperationType.STOP_SERVICES_AMBARI_PROGRESS_STATE;
+import static com.sequenceiq.cloudbreak.service.cluster.ambari.DataNodeUtils.sortByUsedSpace;
 import static com.sequenceiq.cloudbreak.service.cluster.flow.AmbariOperationService.AMBARI_POLLING_INTERVAL;
 import static com.sequenceiq.cloudbreak.service.cluster.flow.AmbariOperationService.MAX_ATTEMPTS_FOR_HOSTS;
 import static java.util.Collections.singletonList;
 import static java.util.Collections.singletonMap;
+import static java.util.Objects.requireNonNull;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -24,10 +25,12 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import javax.annotation.Nonnull;
 import javax.annotation.PostConstruct;
 import javax.inject.Inject;
 
@@ -38,12 +41,10 @@ import org.springframework.stereotype.Component;
 import com.google.common.collect.Sets;
 import com.sequenceiq.ambari.client.AmbariClient;
 import com.sequenceiq.ambari.client.services.ServiceAndHostService;
-import com.sequenceiq.cloudbreak.service.cluster.filter.ConfigParam;
 import com.sequenceiq.cloudbreak.client.HttpClientConfig;
 import com.sequenceiq.cloudbreak.common.model.OrchestratorType;
 import com.sequenceiq.cloudbreak.common.type.HostMetadataState;
 import com.sequenceiq.cloudbreak.controller.BadRequestException;
-import com.sequenceiq.cloudbreak.core.CloudbreakSecuritySetupException;
 import com.sequenceiq.cloudbreak.core.bootstrap.service.OrchestratorTypeResolver;
 import com.sequenceiq.cloudbreak.core.bootstrap.service.container.ContainerOrchestratorResolver;
 import com.sequenceiq.cloudbreak.core.bootstrap.service.host.HostOrchestratorResolver;
@@ -53,6 +54,8 @@ import com.sequenceiq.cloudbreak.domain.Cluster;
 import com.sequenceiq.cloudbreak.domain.Container;
 import com.sequenceiq.cloudbreak.domain.HostGroup;
 import com.sequenceiq.cloudbreak.domain.HostMetadata;
+import com.sequenceiq.cloudbreak.domain.InstanceGroup;
+import com.sequenceiq.cloudbreak.domain.InstanceMetaData;
 import com.sequenceiq.cloudbreak.domain.Orchestrator;
 import com.sequenceiq.cloudbreak.domain.Stack;
 import com.sequenceiq.cloudbreak.orchestrator.container.ContainerOrchestrator;
@@ -70,6 +73,7 @@ import com.sequenceiq.cloudbreak.service.PollingResult;
 import com.sequenceiq.cloudbreak.service.PollingService;
 import com.sequenceiq.cloudbreak.service.TlsSecurityService;
 import com.sequenceiq.cloudbreak.service.cluster.AmbariClientProvider;
+import com.sequenceiq.cloudbreak.service.cluster.filter.ConfigParam;
 import com.sequenceiq.cloudbreak.service.cluster.filter.HostFilterService;
 import com.sequenceiq.cloudbreak.service.cluster.flow.AmbariClientPollerObject;
 import com.sequenceiq.cloudbreak.service.cluster.flow.AmbariDFSSpaceRetrievalTask;
@@ -300,20 +304,48 @@ public class AmbariDecommissioner {
         return downScaleCandidates;
     }
 
-    public void verifyNodeCount(Stack stack, Cluster cluster, String hostName) throws CloudbreakSecuritySetupException {
+    public void verifyNodeCount(@Nonnull Stack stack, @Nonnull Cluster cluster, @Nonnull String hostName) {
+        requireNonNull(stack);
+        requireNonNull(cluster);
+        requireNonNull(hostName);
         HttpClientConfig clientConfig = tlsSecurityService.buildTLSClientConfigForPrimaryGateway(stack.getId(), cluster.getAmbariIp());
         AmbariClient ambariClient = ambariClientProvider.getAmbariClient(clientConfig, stack.getGatewayPort(), cluster);
         String ambariName = cluster.getBlueprint().getAmbariName();
 
         HostGroup hostGroup = hostGroupService.getByClusterAndHostName(cluster, hostName);
 
-        int replication = ambariClient.getBlueprintMap(ambariName).get(hostGroup.getName()).contains(DATANODE)
-                ? getReplicationFactor(ambariClient, hostGroup.getName())
-                : NO_REPLICATION;
-
+        Map<String, List<String>> blueprintMap = ambariClient.getBlueprintMap(ambariName);
+        int replication = NO_REPLICATION;
+        if (!blueprintMap.isEmpty() && !blueprintMap.get(hostGroup.getName()).isEmpty()) {
+            if (blueprintMap.get(hostGroup.getName()).contains(DATANODE)) {
+                replication = getReplicationFactor(ambariClient, hostGroup.getName());
+            }
+        }
         int hostSize = 1;
         int reservedInstances = hostGroup.getHostMetadata().size() - hostSize;
         verifyNodeCount(replication, hostSize, hostSize, reservedInstances);
+    }
+
+    public void verifyNodeIsNotAmbariServer(@Nonnull Stack stack, String nodeName) {
+        requireNonNull(stack);
+        if (getNodePublicIp(stack, nodeName).equals(stack.getAmbariIp())) {
+            String message = "Downscale is prohibited: the node which has selected to downscale maintains the Ambari server";
+            LOGGER.info(message);
+            throw new BadRequestException(message);
+        }
+    }
+
+    private String getNodePublicIp(Stack stack, String nodeName) {
+        for (InstanceGroup instanceGroup : stack.getInstanceGroups()) {
+            for (InstanceMetaData instanceMetaData : instanceGroup.getInstanceMetaData()) {
+                if (Objects.equals(instanceMetaData.getDiscoveryFQDN(), nodeName)) {
+                    return instanceMetaData.getPublicIp();
+                }
+            }
+        }
+        String message = String.format("Could not find the expected \"%s\" host by it's name", nodeName);
+        LOGGER.warn(message);
+        throw new BadRequestException(message);
     }
 
     private Map<String, HostMetadata> collectHostMetadata(Cluster cluster, String hostGroupName, Collection<String> hostNames) {
