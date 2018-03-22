@@ -3,6 +3,7 @@ package com.sequenceiq.cloudbreak.service.stack;
 import static org.mockito.Matchers.anyLong;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -100,11 +101,16 @@ public class StackServiceTest {
      */
     @Test
     public void testRemoveInstanceWhenTheInstanceIsTheOneWhichTheHostForTheAmbariServer() {
+        String ambariPrivateIp = "3.3.3.3";
         String instanceDiscoveryFQDN = "node FQDN";
+        InstanceMetaData mockMetaDataForAmbariPrivateIp = mock(InstanceMetaData.class);
         when(stackRepository.findOne(STACK_ID)).thenReturn(stack);
         when(instanceMetaDataRepository.findByInstanceId(STACK_ID, INSTANCE_ID)).thenReturn(instanceMetaData);
         when(instanceMetaData.getPublicIp()).thenReturn(AMBARI_IP);
         when(stack.getAmbariIp()).thenReturn(AMBARI_IP);
+        when(instanceMetaDataRepository.getPrimaryGatewayInstanceMetadata(STACK_ID)).thenReturn(mockMetaDataForAmbariPrivateIp);
+        when(mockMetaDataForAmbariPrivateIp.getPrivateIp()).thenReturn(ambariPrivateIp);
+        when(instanceMetaData.getPrivateIp()).thenReturn(ambariPrivateIp);
         when(user.getUserId()).thenReturn(IDENTITY_USER_ID);
         when(stack.getOwner()).thenReturn(STACK_OWNER);
         when(stack.isPublicInAccount()).thenReturn(true);
