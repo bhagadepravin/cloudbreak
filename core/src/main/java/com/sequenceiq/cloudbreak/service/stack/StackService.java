@@ -419,7 +419,8 @@ public class StackService {
         InstanceMetaData instanceMetaData = instanceMetaDataRepository.findByInstanceId(stackId, instanceId);
         if (instanceMetaData == null) {
             throw new NotFoundException(String.format("Metadata for instance %s not found.", instanceId));
-        } else if (instanceMetaData.getPublicIp().equals(stack.getAmbariIp())) {
+        } else if (instanceMetaData.getPublicIp().equals(stack.getAmbariIp())
+                && instanceMetaDataRepository.getPrimaryGatewayInstanceMetadata(stackId).getPrivateIp().equals(instanceMetaData.getPrivateIp())) {
             throw new BadRequestException(String.format("Downscale for node [%s] is prohibited because it maintains the Ambari server",
                     instanceMetaData.getDiscoveryFQDN()));
         } else if (!stack.isPublicInAccount() && !stack.getOwner().equals(user.getUserId())) {
